@@ -1,0 +1,87 @@
+'use client';
+
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import {
+  User,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+} from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
+import { useRouter } from 'next/navigation';
+
+interface UserProfile {
+  uid: string;
+  name: string;
+  age: number;
+  email: string;
+  createdAt: string;
+  eligible: boolean;
+}
+
+interface AuthContextType {
+  user: User | null;
+  profile: UserProfile | null;
+  loading: boolean;
+  signOut: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  profile: null,
+  loading: true,
+  signOut: async () => {},
+});
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      // Resolve loading immediately based on auth state — don't wait for Firestore
+      setLoading(false);
+
+      // Fetch Firestore profile in background (non-blocking)
+      if (firebaseUser) {
+        getDoc(doc(db, 'users', firebaseUser.uid))
+          .then((docSnap) => {
+            if (docSnap.exists()) {
+              setProfile(docSnap.data() as UserProfile);
+            }
+          })
+          .catch((err) => {
+            console.warn('Could not fetch user profile:', err);
+          });
+      } else {
+        setProfile(null);
+      }
+    });
+
+    // Safety timeout — if Firebase never responds in 5s, unblock the app
+    const timeout = setTimeout(() => setLoading(false), 5000);
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timeout);
+    };
+  }, []);
+
+  const signOut = async () => {
+    await firebaseSignOut(auth);
+    setUser(null);
+    setProfile(null);
+    router.push('/');
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, profile, loading, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export const useAuth = () => useContext(AuthContext);
